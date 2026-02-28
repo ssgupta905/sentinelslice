@@ -1,0 +1,1485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SentinelSlice — Operational Memory Bank</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Reset & Root ──────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #080c10;
+      --surface:   #0d1117;
+      --panel:     #111820;
+      --border:    #1e2d3d;
+      --border2:   #243447;
+      --accent:    #00d4ff;
+      --accent2:   #0094b8;
+      --green:     #00e5a0;
+      --amber:     #ffb830;
+      --red:       #ff4d6a;
+      --purple:    #b06eff;
+      --text:      #c9d8e8;
+      --text-dim:  #5a7a99;
+      --text-faint:#334455;
+      --mono:      'IBM Plex Mono', monospace;
+      --sans:      'Syne', sans-serif;
+      --radius:    4px;
+      --glow:      0 0 20px rgba(0, 212, 255, 0.15);
+      --glow-green:0 0 16px rgba(0, 229, 160, 0.2);
+    }
+
+    html { font-size: 14px; scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* scanline overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.03) 2px,
+        rgba(0,0,0,0.03) 4px
+      );
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ── Layout ────────────────────────────────────────────────────────── */
+    .app { display: grid; grid-template-rows: auto 1fr; min-height: 100vh; }
+
+    /* ── Header ────────────────────────────────────────────────────────── */
+    .header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-family: var(--sans);
+      font-weight: 800;
+      font-size: 1.2rem;
+      letter-spacing: -0.02em;
+    }
+
+    .logo-icon {
+      width: 32px;
+      height: 32px;
+      position: relative;
+    }
+
+    .logo-icon svg { display: block; }
+
+    .logo-text { color: #fff; }
+    .logo-text span { color: var(--accent); }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      font-size: 0.78rem;
+      color: var(--text-dim);
+    }
+
+    .status-dot {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-dot::before {
+      content: '';
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-faint);
+      animation: pulse 2s infinite;
+    }
+    .status-dot.online::before { background: var(--green); }
+    .status-dot.error::before  { background: var(--red); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .header-nav {
+      display: flex;
+      gap: 2px;
+    }
+
+    .nav-btn {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      padding: 6px 14px;
+      cursor: pointer;
+      border-radius: var(--radius);
+      transition: all 0.15s;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .nav-btn:hover { background: var(--panel); color: var(--text); }
+    .nav-btn.active { background: var(--panel); color: var(--accent); border: 1px solid var(--border); }
+
+    /* ── Main ──────────────────────────────────────────────────────────── */
+    .main {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      height: calc(100vh - 56px);
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ───────────────────────────────────────────────────────── */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 16px 0;
+    }
+
+    .sidebar-section { margin-bottom: 24px; }
+
+    .sidebar-label {
+      font-size: 0.65rem;
+      color: var(--text-faint);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      padding: 0 16px 8px;
+    }
+
+    .sidebar-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: all 0.12s;
+      border-left: 2px solid transparent;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+    }
+    .sidebar-item:hover { background: var(--panel); color: var(--text); }
+    .sidebar-item.active {
+      background: var(--panel);
+      color: var(--accent);
+      border-left-color: var(--accent);
+    }
+
+    .sidebar-item svg { flex-shrink: 0; opacity: 0.7; }
+    .sidebar-item.active svg { opacity: 1; }
+
+    .sidebar-count {
+      margin-left: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 1px 7px;
+      border-radius: 10px;
+      font-size: 0.7rem;
+      color: var(--text-dim);
+    }
+    .sidebar-item.active .sidebar-count {
+      background: rgba(0,212,255,0.1);
+      border-color: rgba(0,212,255,0.3);
+      color: var(--accent);
+    }
+
+    /* domain filter */
+    .domain-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px 4px 8px;
+      margin: 2px 4px;
+      border-radius: 2px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      font-size: 0.72rem;
+      cursor: pointer;
+      color: var(--text-dim);
+      transition: all 0.12s;
+    }
+    .domain-chip:hover { border-color: var(--border2); color: var(--text); }
+    .domain-chip.active { background: rgba(0,212,255,0.08); border-color: var(--accent2); color: var(--accent); }
+    .domain-chip .dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* ── Content area ──────────────────────────────────────────────────── */
+    .content {
+      overflow-y: auto;
+      padding: 24px;
+      background: var(--bg);
+    }
+
+    /* ── Views ─────────────────────────────────────────────────────────── */
+    .view { display: none; }
+    .view.active { display: block; }
+
+    /* ── Page title ────────────────────────────────────────────────────── */
+    .page-title {
+      font-family: var(--sans);
+      font-weight: 700;
+      font-size: 1.4rem;
+      color: #fff;
+      margin-bottom: 4px;
+    }
+    .page-sub {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      margin-bottom: 24px;
+    }
+
+    /* ── Cards ─────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+    }
+
+    /* ── Stats row ─────────────────────────────────────────────────────── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 2px;
+    }
+    .stat-card.accent::after { background: var(--accent); }
+    .stat-card.green::after  { background: var(--green); }
+    .stat-card.amber::after  { background: var(--amber); }
+    .stat-card.purple::after { background: var(--purple); }
+
+    .stat-label { font-size: 0.68rem; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; }
+    .stat-value {
+      font-family: var(--sans);
+      font-weight: 700;
+      font-size: 2rem;
+      color: #fff;
+      line-height: 1.1;
+      margin: 4px 0 2px;
+    }
+    .stat-sub { font-size: 0.7rem; color: var(--text-faint); }
+
+    /* ── Form elements ─────────────────────────────────────────────────── */
+    label {
+      display: block;
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      padding: 10px 12px;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      resize: vertical;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--accent2);
+      box-shadow: 0 0 0 3px rgba(0,212,255,0.08);
+    }
+    textarea { min-height: 100px; }
+    select option { background: var(--panel); }
+
+    .form-row { margin-bottom: 14px; }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    /* ── Buttons ───────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 18px;
+      border-radius: var(--radius);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+    }
+    .btn-primary:hover { background: #33ddff; }
+    .btn-primary:active { transform: scale(0.98); }
+
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+    .btn-ghost:hover { border-color: var(--border2); color: var(--text); }
+
+    .btn-danger {
+      background: transparent;
+      border: 1px solid rgba(255,77,106,0.3);
+      color: var(--red);
+    }
+    .btn-danger:hover { background: rgba(255,77,106,0.08); }
+
+    .btn-green {
+      background: var(--green);
+      color: #000;
+    }
+    .btn-green:hover { background: #33ffb8; }
+
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Tag / badge ───────────────────────────────────────────────────── */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 2px;
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 500;
+    }
+    .badge-critical { background: rgba(255,77,106,0.15); color: var(--red); border: 1px solid rgba(255,77,106,0.3); }
+    .badge-high     { background: rgba(255,184,48,0.12); color: var(--amber); border: 1px solid rgba(255,184,48,0.25); }
+    .badge-medium   { background: rgba(0,212,255,0.1); color: var(--accent); border: 1px solid rgba(0,212,255,0.2); }
+    .badge-low      { background: rgba(0,229,160,0.1); color: var(--green); border: 1px solid rgba(0,229,160,0.2); }
+    .badge-domain   { background: var(--panel); color: var(--text-dim); border: 1px solid var(--border); }
+
+    /* ── Slice card ────────────────────────────────────────────────────── */
+    .slice-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 10px;
+      transition: border-color 0.15s;
+      cursor: default;
+    }
+    .slice-card:hover { border-color: var(--border2); }
+
+    .slice-card-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .slice-card-meta {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .slice-summary {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+      border-left: 2px solid var(--border);
+      padding-left: 10px;
+      margin-bottom: 10px;
+    }
+
+    .slice-resolution {
+      font-size: 0.78rem;
+      color: var(--text-faint);
+      line-height: 1.5;
+    }
+
+    .slice-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ── Score bar ─────────────────────────────────────────────────────── */
+    .score-bar {
+      height: 3px;
+      background: var(--panel);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+    .score-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--green));
+      border-radius: 2px;
+      transition: width 0.5s ease;
+    }
+
+    /* ── Match card ────────────────────────────────────────────────────── */
+    .match-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 10px;
+    }
+    .match-rank {
+      font-family: var(--sans);
+      font-weight: 700;
+      font-size: 1.8rem;
+      color: var(--text-faint);
+      line-height: 1;
+    }
+    .match-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+    .match-info { flex: 1; }
+    .match-id {
+      font-size: 0.72rem;
+      color: var(--accent);
+      letter-spacing: 0.05em;
+    }
+    .match-score-label {
+      font-size: 0.68rem;
+      color: var(--text-faint);
+      margin-top: 2px;
+    }
+
+    /* ── Runbook ───────────────────────────────────────────────────────── */
+    .runbook-content {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      white-space: pre-wrap;
+      font-size: 0.8rem;
+      line-height: 1.8;
+      color: var(--text);
+      max-height: 500px;
+      overflow-y: auto;
+    }
+
+    .runbook-content strong,
+    .runbook-content b { color: var(--accent); }
+
+    /* ── Timeline ──────────────────────────────────────────────────────── */
+    .timeline { list-style: none; }
+    .timeline-item {
+      display: flex;
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.78rem;
+    }
+    .timeline-item:last-child { border-bottom: none; }
+    .timeline-agent { color: var(--accent); font-weight: 500; min-width: 140px; }
+    .timeline-time { color: var(--green); min-width: 60px; }
+    .timeline-detail { color: var(--text-dim); }
+
+    /* ── Pattern block ─────────────────────────────────────────────────── */
+    .pattern-block {
+      background: rgba(0,212,255,0.05);
+      border: 1px solid rgba(0,212,255,0.15);
+      border-radius: var(--radius);
+      padding: 14px;
+      font-size: 0.82rem;
+      line-height: 1.7;
+      color: var(--text);
+      margin-bottom: 16px;
+    }
+
+    /* ── Loading / spinner ─────────────────────────────────────────────── */
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Toast ─────────────────────────────────────────────────────────── */
+    #toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .toast {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      font-size: 0.8rem;
+      color: var(--text);
+      max-width: 320px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: slideIn 0.2s ease;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+    .toast.success { border-color: rgba(0,229,160,0.4); }
+    .toast.error   { border-color: rgba(255,77,106,0.4); }
+    .toast.info    { border-color: rgba(0,212,255,0.3); }
+    .toast .toast-icon { font-size: 1rem; }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(20px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    /* ── Divider ───────────────────────────────────────────────────────── */
+    .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+    /* ── Empty state ───────────────────────────────────────────────────── */
+    .empty-state {
+      text-align: center;
+      padding: 48px 24px;
+      color: var(--text-faint);
+      font-size: 0.82rem;
+    }
+    .empty-state .icon { font-size: 2.5rem; margin-bottom: 12px; opacity: 0.4; }
+    .empty-state p { margin-bottom: 4px; }
+
+    /* ── Setup Banner ──────────────────────────────────────────────────── */
+    .setup-banner {
+      background: rgba(255,184,48,0.06);
+      border: 1px solid rgba(255,184,48,0.2);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.8rem;
+      color: var(--amber);
+    }
+
+    /* ── Setup form ────────────────────────────────────────────────────── */
+    .setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    /* ── Scrollbar ─────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--border2); }
+
+    /* ── Animations ────────────────────────────────────────────────────── */
+    .fade-in {
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── Terminal prompt ───────────────────────────────────────────────── */
+    .prompt {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+    .prompt-ps { color: var(--green); }
+
+    .glow-text { color: var(--accent); text-shadow: 0 0 12px rgba(0,212,255,0.5); }
+
+    @media (max-width: 768px) {
+      .main { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .stats-row { grid-template-columns: 1fr 1fr; }
+      .form-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <header class="header">
+    <div class="logo">
+      <div class="logo-icon">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <rect width="32" height="32" rx="4" fill="#0d1117"/>
+          <polygon points="16,4 28,10 28,22 16,28 4,22 4,10" fill="none" stroke="#00d4ff" stroke-width="1.5" opacity="0.5"/>
+          <polygon points="16,8 24,12 24,20 16,24 8,20 8,12" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+          <circle cx="16" cy="16" r="4" fill="#00d4ff"/>
+          <circle cx="16" cy="16" r="2" fill="#080c10"/>
+        </svg>
+      </div>
+      <div class="logo-text">Sentinel<span>Slice</span></div>
+    </div>
+
+    <nav class="header-nav">
+      <button class="nav-btn active" onclick="switchView('analyze')">Analyze</button>
+      <button class="nav-btn" onclick="switchView('memory')">Memory Bank</button>
+      <button class="nav-btn" onclick="switchView('ingest')">Ingest</button>
+      <button class="nav-btn" onclick="switchView('setup')">Setup</button>
+    </nav>
+
+    <div class="header-status">
+      <div class="status-dot" id="es-status">Elasticsearch</div>
+      <div class="status-dot" id="ai-status">LLM Ready</div>
+    </div>
+  </header>
+
+  <!-- ── Main ────────────────────────────────────────────────────────── -->
+  <div class="main">
+
+    <!-- ── Sidebar ─────────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Navigation</div>
+        <div class="sidebar-item active" onclick="switchView('analyze')" id="nav-analyze">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>
+          Analyze Incident
+        </div>
+        <div class="sidebar-item" onclick="switchView('memory')" id="nav-memory">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h16v3"/><path d="M4 20v-3h16v3"/><rect x="2" y="7" width="20" height="10" rx="1"/><path d="M8 11h8M8 14h5"/></svg>
+          Memory Bank
+          <span class="sidebar-count" id="slice-count">—</span>
+        </div>
+        <div class="sidebar-item" onclick="switchView('ingest')" id="nav-ingest">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+          Ingest Slice
+        </div>
+        <div class="sidebar-item" onclick="switchView('setup')" id="nav-setup">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          Setup
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">Filter by Domain</div>
+        <div id="domain-filters" style="padding: 0 8px;">
+          <div class="domain-chip active" data-domain="" onclick="filterDomain(this)">
+            <span class="dot"></span> All
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">System</div>
+        <div style="padding: 0 16px; font-size: 0.72rem; color: var(--text-faint); line-height: 1.8;">
+          <div>Index: <span style="color:var(--text-dim)" id="index-name">—</span></div>
+          <div>Vectors: BBQ-HNSW</div>
+          <div>Search: RRF Hybrid</div>
+          <div>Model: text-embedding-3-small</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ── Content ──────────────────────────────────────────────────── -->
+    <main class="content">
+
+      <!-- ── ANALYZE VIEW ──────────────────────────────────────────── -->
+      <div class="view active" id="view-analyze">
+        <div class="page-title">Analyze Incident</div>
+        <div class="page-sub">Describe current symptoms → retrieve historical matches → generate runbook</div>
+
+        <div class="card">
+          <div class="card-title">// Incident Symptoms</div>
+          <div class="form-row">
+            <label>Domain / Service</label>
+            <select id="analyze-domain">
+              <option value="">— select domain —</option>
+              <option value="k8s-controlplane">k8s-controlplane</option>
+              <option value="ecommerce-api">ecommerce-api</option>
+              <option value="ml-inference">ml-inference</option>
+              <option value="data-pipeline">data-pipeline</option>
+              <option value="network-5g">network-5g</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Current Anomaly Description</label>
+            <textarea id="analyze-symptoms" rows="5"
+              placeholder="e.g. API server is feeling sluggish, seeing latency spikes and some webhook timeouts. Pod scheduling failures increasing."></textarea>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <button class="btn btn-primary" onclick="runAnalysis()" id="analyze-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run Agentic Analysis
+            </button>
+            <div id="analyze-loading" style="display:none; align-items:center; gap:8px; color:var(--text-dim); font-size:0.78rem;">
+              <div class="spinner"></div>
+              <span id="analyze-status">Initializing agents…</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Results -->
+        <div id="analyze-results" style="display:none" class="fade-in">
+
+          <!-- Timeline -->
+          <div class="card">
+            <div class="card-title">// Agent Execution Timeline</div>
+            <ul class="timeline" id="timeline-list"></ul>
+            <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border); display:flex; gap:16px; font-size:0.78rem;">
+              <span>Total: <span class="glow-text" id="total-time">—</span></span>
+              <span style="color:var(--text-faint)">Domain: <span id="result-domain" style="color:var(--text-dim)">—</span></span>
+            </div>
+          </div>
+
+          <!-- Pattern -->
+          <div class="card">
+            <div class="card-title">// Root Cause Pattern</div>
+            <div class="pattern-block" id="pattern-text"></div>
+          </div>
+
+          <!-- Matches -->
+          <div class="card">
+            <div class="card-title">// Historical Matches</div>
+            <div id="matches-list"></div>
+          </div>
+
+          <!-- Runbook -->
+          <div class="card">
+            <div class="card-title">// Generated Runbook</div>
+            <div class="runbook-content" id="runbook-content"></div>
+            <div style="margin-top:12px; display:flex; gap:10px;">
+              <button class="btn btn-ghost" onclick="copyRunbook()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                Copy Runbook
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── MEMORY BANK VIEW ───────────────────────────────────────── -->
+      <div class="view" id="view-memory">
+        <div class="page-title">Memory Bank</div>
+        <div class="page-sub">Stored operational slices — the knowledge base powering remediation</div>
+
+        <div class="stats-row" id="stats-row">
+          <div class="stat-card accent">
+            <div class="stat-label">Total Slices</div>
+            <div class="stat-value" id="stat-total">—</div>
+            <div class="stat-sub">in memory bank</div>
+          </div>
+          <div class="stat-card green">
+            <div class="stat-label">Domains</div>
+            <div class="stat-value" id="stat-domains">—</div>
+            <div class="stat-sub">active namespaces</div>
+          </div>
+          <div class="stat-card amber">
+            <div class="stat-label">Vector Index</div>
+            <div class="stat-value">BBQ</div>
+            <div class="stat-sub">32× size reduction</div>
+          </div>
+          <div class="stat-card purple">
+            <div class="stat-label">Search Mode</div>
+            <div class="stat-value" style="font-size:1.2rem; padding-top:4px;">RRF</div>
+            <div class="stat-sub">hybrid retrieval</div>
+          </div>
+        </div>
+
+        <!-- Search bar -->
+        <div style="display:flex; gap:10px; margin-bottom:16px;">
+          <input type="text" id="memory-search" placeholder="Search slices… (semantic + keyword)"
+            style="flex:1;" onkeydown="if(event.key==='Enter') searchMemory()" />
+          <button class="btn btn-primary" onclick="searchMemory()">Search</button>
+          <button class="btn btn-ghost" onclick="loadMemory()">Refresh</button>
+        </div>
+
+        <div id="memory-list">
+          <div class="empty-state">
+            <div class="icon">◈</div>
+            <p>Loading memory bank…</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── INGEST VIEW ────────────────────────────────────────────── -->
+      <div class="view" id="view-ingest">
+        <div class="page-title">Ingest Slice</div>
+        <div class="page-sub">Add a new operational slice to the memory bank</div>
+
+        <div class="card">
+          <div class="card-title">// New Operational Slice</div>
+          <div class="form-row">
+            <label>Domain</label>
+            <select id="ingest-domain">
+              <option value="k8s-controlplane">k8s-controlplane</option>
+              <option value="ecommerce-api">ecommerce-api</option>
+              <option value="ml-inference">ml-inference</option>
+              <option value="data-pipeline">data-pipeline</option>
+              <option value="network-5g">network-5g</option>
+              <option value="custom">custom…</option>
+            </select>
+          </div>
+          <div class="form-row" id="custom-domain-row" style="display:none;">
+            <label>Custom Domain Name</label>
+            <input type="text" id="custom-domain-input" placeholder="e.g. payments-service" />
+          </div>
+          <div class="form-row">
+            <label>State Summary (Operational Fingerprint)</label>
+            <textarea id="ingest-summary" rows="5"
+              placeholder="Describe the system state during the incident — node CPU, error patterns, latency readings, affected services…"></textarea>
+          </div>
+          <div class="form-row">
+            <label>Resolution</label>
+            <textarea id="ingest-resolution" rows="5"
+              placeholder="What fixed it? Include specific commands, config changes, scaling actions, resolution time…"></textarea>
+          </div>
+
+          <div class="card-title" style="margin-top:8px;">// Metadata (optional)</div>
+          <div class="form-grid">
+            <div>
+              <label>Incident ID</label>
+              <input type="text" id="meta-incident-id" placeholder="e.g. INC-042" />
+            </div>
+            <div>
+              <label>Severity</label>
+              <select id="meta-severity">
+                <option value="critical">critical</option>
+                <option value="high">high</option>
+                <option value="medium" selected>medium</option>
+                <option value="low">low</option>
+              </select>
+            </div>
+            <div>
+              <label>Duration (minutes)</label>
+              <input type="number" id="meta-duration" placeholder="e.g. 34" />
+            </div>
+          </div>
+
+          <div style="margin-top:16px; display:flex; gap:10px; align-items:center;">
+            <button class="btn btn-primary" onclick="ingestSlice()" id="ingest-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/><rect x="2" y="15" width="20" height="6" rx="2"/></svg>
+              Ingest Slice
+            </button>
+            <button class="btn btn-ghost" onclick="seedDemo()" id="seed-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg>
+              Seed Demo Data
+            </button>
+            <div id="ingest-loading" style="display:none; align-items:center; gap:8px; color:var(--text-dim); font-size:0.78rem;">
+              <div class="spinner"></div> Ingesting…
+            </div>
+          </div>
+        </div>
+
+        <div class="prompt">
+          <span class="prompt-ps">$</span>
+          <span>
+            Slices are automatically embedded via Elasticsearch's Open Inference API (OpenAI text-embedding-3-small)
+            and stored with BBQ-HNSW quantization — achieving <strong style="color:var(--accent)">32× compression</strong> vs raw float32 vectors.
+          </span>
+        </div>
+      </div>
+
+      <!-- ── SETUP VIEW ─────────────────────────────────────────────── -->
+      <div class="view" id="view-setup">
+        <div class="page-title">Setup</div>
+        <div class="page-sub">Configure Elasticsearch Cloud + OpenAI credentials and initialize infrastructure</div>
+
+        <div class="card">
+          <div class="card-title">// API Credentials</div>
+          <div class="setup-grid">
+            <div class="form-row">
+              <label>Elasticsearch Cloud URL</label>
+              <input type="text" id="setup-es-url" placeholder="https://your-id.es.us-east-1.aws.elastic-cloud.com" />
+            </div>
+            <div class="form-row">
+              <label>Elasticsearch API Key</label>
+              <input type="password" id="setup-es-key" placeholder="your_elastic_api_key" />
+            </div>
+            <div class="form-row">
+              <label>OpenAI API Key</label>
+              <input type="password" id="setup-openai-key" placeholder="sk-..." />
+            </div>
+            <div class="form-row">
+              <label>Embedding Model</label>
+              <select id="setup-model">
+                <option value="text-embedding-3-small">text-embedding-3-small (recommended)</option>
+                <option value="text-embedding-3-large">text-embedding-3-large</option>
+                <option value="text-embedding-ada-002">text-embedding-ada-002</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>Backend API URL</label>
+              <input type="text" id="setup-api-url" value="http://localhost:8000" />
+            </div>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center; margin-top:8px;">
+            <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+            <button class="btn btn-ghost" onclick="initSetup()" id="init-btn">Initialize Infrastructure</button>
+            <button class="btn btn-ghost" onclick="checkHealth()">Check Health</button>
+            <div id="setup-loading" style="display:none; align-items:center; gap:8px; color:var(--text-dim); font-size:0.78rem;">
+              <div class="spinner"></div> Initializing…
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">// Architecture Overview</div>
+          <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:16px; font-size:0.78rem;">
+            <div>
+              <div style="color:var(--accent); margin-bottom:8px; font-size:0.72rem; letter-spacing:0.08em; text-transform:uppercase;">① Ingest</div>
+              <div style="color:var(--text-dim); line-height:1.7;">
+                Raw logs → Ingest Pipeline → OpenAI embeddings → BBQ-HNSW vectors stored in Elasticsearch
+              </div>
+            </div>
+            <div>
+              <div style="color:var(--green); margin-bottom:8px; font-size:0.72rem; letter-spacing:0.08em; text-transform:uppercase;">② Retrieve</div>
+              <div style="color:var(--text-dim); line-height:1.7;">
+                Hybrid RRF: lexical BM25 + semantic vector search fused with Reciprocal Rank Fusion
+              </div>
+            </div>
+            <div>
+              <div style="color:var(--purple); margin-bottom:8px; font-size:0.72rem; letter-spacing:0.08em; text-transform:uppercase;">③ Generate</div>
+              <div style="color:var(--text-dim); line-height:1.7;">
+                3-agent LLM loop: Retrieval → Analysis → Action → grounded runbook in &lt;4 seconds
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script>
+/* ── Config ─────────────────────────────────────────────────────────── */
+let API_BASE = localStorage.getItem('sentinel_api_url') || 'http://localhost:8000';
+let activeDomain = '';
+
+/* ── Init ────────────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  // Restore config
+  const savedUrl = localStorage.getItem('sentinel_api_url');
+  if (savedUrl) document.getElementById('setup-api-url').value = savedUrl;
+
+  const savedOpenAIKey = localStorage.getItem('sentinel_openai_key');
+  if (savedOpenAIKey) document.getElementById('setup-openai-key').value = savedOpenAIKey;
+
+  // Custom domain toggle
+  document.getElementById('ingest-domain').addEventListener('change', function() {
+    document.getElementById('custom-domain-row').style.display =
+      this.value === 'custom' ? 'block' : 'none';
+  });
+
+  checkHealth();
+  loadStats();
+  updateIndexName();
+});
+
+function updateIndexName() {
+  document.getElementById('index-name').textContent = 'sentinel-slices';
+}
+
+/* ── Navigation ──────────────────────────────────────────────────────── */
+function switchView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.sidebar-item').forEach(b => b.classList.remove('active'));
+
+  document.getElementById('view-' + name).classList.add('active');
+
+  const navBtns = document.querySelectorAll('.nav-btn');
+  navBtns.forEach(b => { if (b.textContent.toLowerCase().includes(nameLabel(name))) b.classList.add('active'); });
+
+  const sideNav = document.getElementById('nav-' + name);
+  if (sideNav) sideNav.classList.add('active');
+
+  if (name === 'memory') loadMemory();
+  if (name === 'memory' || name === 'analyze') loadStats();
+}
+
+function nameLabel(n) {
+  const m = { analyze:'analy', memory:'memory', ingest:'ingest', setup:'setup' };
+  return m[n] || n;
+}
+
+/* ── Health check ────────────────────────────────────────────────────── */
+async function checkHealth() {
+  try {
+    const res = await apiFetch('/health');
+    const dot = document.getElementById('es-status');
+    if (res.elasticsearch) {
+      dot.className = 'status-dot online';
+      dot.textContent = 'Elasticsearch';
+    } else {
+      dot.className = 'status-dot error';
+      dot.textContent = 'ES Offline';
+    }
+    document.getElementById('ai-status').className = 'status-dot online';
+  } catch {
+    document.getElementById('es-status').className = 'status-dot error';
+    document.getElementById('es-status').textContent = 'API Offline';
+  }
+}
+
+/* ── Stats ───────────────────────────────────────────────────────────── */
+async function loadStats() {
+  try {
+    const res = await apiFetch('/api/stats');
+    if (res.success) {
+      const d = res.data;
+      document.getElementById('stat-total').textContent = d.total_slices;
+      document.getElementById('stat-domains').textContent = d.by_domain.length;
+      document.getElementById('slice-count').textContent = d.total_slices;
+
+      // Update domain filters
+      const container = document.getElementById('domain-filters');
+      container.innerHTML = `<div class="domain-chip active" data-domain="" onclick="filterDomain(this)"><span class="dot"></span> All</div>`;
+      const analyzeSelect = document.getElementById('analyze-domain');
+      analyzeSelect.innerHTML = '<option value="">— select domain —</option>';
+
+      d.by_domain.forEach(({ domain, count }) => {
+        const chip = document.createElement('div');
+        chip.className = 'domain-chip';
+        chip.dataset.domain = domain;
+        chip.onclick = function() { filterDomain(this); };
+        chip.innerHTML = `<span class="dot"></span> ${domain} <span style="color:var(--text-faint)">(${count})</span>`;
+        container.appendChild(chip);
+        analyzeSelect.innerHTML += `<option value="${domain}">${domain}</option>`;
+      });
+    }
+  } catch (e) {}
+}
+
+function filterDomain(el) {
+  document.querySelectorAll('.domain-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  activeDomain = el.dataset.domain;
+  loadMemory();
+}
+
+/* ── Memory Bank ─────────────────────────────────────────────────────── */
+async function loadMemory() {
+  const container = document.getElementById('memory-list');
+  container.innerHTML = '<div class="empty-state"><div class="icon">◈</div><p>Loading…</p></div>';
+  try {
+    const url = activeDomain ? `/api/slices?domain=${activeDomain}&size=30` : '/api/slices?size=30';
+    const res = await apiFetch(url);
+    if (res.success && res.data.slices.length) {
+      renderSlices(res.data.slices, container, false);
+    } else {
+      container.innerHTML = `<div class="empty-state">
+        <div class="icon">◈</div>
+        <p>No slices found.</p>
+        <p style="margin-top:8px;"><button class="btn btn-ghost" onclick="seedDemo()">Seed demo data</button></p>
+      </div>`;
+    }
+  } catch {
+    container.innerHTML = `<div class="empty-state">
+      <div class="icon">⚠</div>
+      <p style="color:var(--red)">Could not connect to API. Check your backend URL in Setup.</p>
+    </div>`;
+  }
+}
+
+async function searchMemory() {
+  const q = document.getElementById('memory-search').value.trim();
+  if (!q) return loadMemory();
+  const container = document.getElementById('memory-list');
+  container.innerHTML = '<div class="empty-state"><div class="spinner" style="margin:0 auto"></div></div>';
+  try {
+    const res = await apiFetch('/api/slices/search', 'POST', {
+      query: q,
+      domain: activeDomain || undefined,
+      top_k: 15,
+    });
+    if (res.success && res.data.hits.length) {
+      renderSlices(res.data.hits, container, true);
+    } else {
+      container.innerHTML = `<div class="empty-state"><div class="icon">◈</div><p>No matches for "${q}"</p></div>`;
+    }
+  } catch (e) {
+    toast('Search failed: ' + e.message, 'error');
+  }
+}
+
+function renderSlices(slices, container, showScore) {
+  container.innerHTML = '';
+  slices.forEach(s => {
+    const score = s.score ? Math.round(s.score * 100) : null;
+    const incId = s.metadata?.incident_id || s.incident_id || s.id?.slice(0,8);
+    const sev   = s.metadata?.severity || s.severity || 'medium';
+    const dur   = s.metadata?.duration_min || s.duration_min;
+
+    const card = document.createElement('div');
+    card.className = 'slice-card fade-in';
+    card.innerHTML = `
+      <div class="slice-card-header">
+        <div class="slice-card-meta">
+          <span class="badge badge-domain">${s.domain}</span>
+          <span class="badge badge-${sev}">${sev}</span>
+          ${incId ? `<span style="font-size:0.72rem;color:var(--accent)">${incId}</span>` : ''}
+          ${dur ? `<span style="font-size:0.7rem;color:var(--text-faint)">${dur}min</span>` : ''}
+        </div>
+        ${showScore && score !== null ? `
+          <div style="text-align:right;min-width:80px">
+            <div style="font-size:0.68rem;color:var(--text-faint)">Similarity</div>
+            <div style="font-size:0.85rem;color:var(--accent)">${(s.score||0).toFixed(2)}</div>
+            <div class="score-bar"><div class="score-fill" style="width:${Math.min(score,100)}%"></div></div>
+          </div>` : ''}
+      </div>
+      <div class="slice-summary">${truncate(s.state_summary, 200)}</div>
+      <details>
+        <summary style="font-size:0.72rem;color:var(--text-faint);cursor:pointer;user-select:none;padding:4px 0;">
+          Show resolution
+        </summary>
+        <div class="slice-resolution" style="margin-top:8px;">${s.resolution}</div>
+      </details>
+      <div class="slice-actions">
+        <button class="btn btn-ghost" style="font-size:0.72rem;padding:5px 10px;"
+          onclick="prefillAnalyze('${escAttr(s.state_summary)}','${escAttr(s.domain)}')">
+          ↗ Analyze Similar
+        </button>
+        <button class="btn btn-danger" style="font-size:0.72rem;padding:5px 10px;"
+          onclick="deleteSlice('${s.id}', this)">Delete</button>
+      </div>`;
+    container.appendChild(card);
+  });
+}
+
+async function deleteSlice(id, btn) {
+  if (!confirm('Delete this slice from the memory bank?')) return;
+  try {
+    await apiFetch('/api/slices/' + id, 'DELETE');
+    btn.closest('.slice-card').remove();
+    toast('Slice deleted.', 'info');
+    loadStats();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'error');
+  }
+}
+
+function prefillAnalyze(summary, domain) {
+  document.getElementById('analyze-symptoms').value = summary;
+  const sel = document.getElementById('analyze-domain');
+  for (const opt of sel.options) {
+    if (opt.value === domain) { sel.value = domain; break; }
+  }
+  switchView('analyze');
+  toast('Prefilled from memory bank slice.', 'info');
+}
+
+/* ── Analyze ─────────────────────────────────────────────────────────── */
+async function runAnalysis() {
+  const symptoms = document.getElementById('analyze-symptoms').value.trim();
+  const domain   = document.getElementById('analyze-domain').value;
+
+  if (!symptoms) return toast('Please enter incident symptoms.', 'error');
+  if (!domain) return toast('Please select a domain.', 'error');
+
+  const btn = document.getElementById('analyze-btn');
+  const loading = document.getElementById('analyze-loading');
+  const results = document.getElementById('analyze-results');
+  const status = document.getElementById('analyze-status');
+
+  btn.disabled = true;
+  loading.style.display = 'flex';
+  results.style.display = 'none';
+
+  const steps = [
+    'Initializing retrieval agent…',
+    'Running hybrid RRF search…',
+    'Synthesizing pattern (Analysis Agent)…',
+    'Generating runbook (Action Agent)…',
+  ];
+  let si = 0;
+  const stepTimer = setInterval(() => {
+    if (si < steps.length) status.textContent = steps[si++];
+  }, 1200);
+
+  try {
+    const res = await apiFetch('/api/analyze', 'POST', {
+      symptoms, domain, top_k: 3
+    });
+
+    clearInterval(stepTimer);
+
+    if (res.success) {
+      const d = res.data;
+
+      // Timeline
+      const tl = document.getElementById('timeline-list');
+      tl.innerHTML = '';
+      (d.timeline || []).forEach(t => {
+        const li = document.createElement('li');
+        li.className = 'timeline-item';
+        li.innerHTML = `
+          <span class="timeline-agent">${t.agent}</span>
+          <span class="timeline-time">${t.duration_s}s</span>
+          <span class="timeline-detail">${t.detail}</span>`;
+        tl.appendChild(li);
+      });
+      document.getElementById('total-time').textContent = (d.total_time_s || '—') + 's';
+      document.getElementById('result-domain').textContent = domain;
+
+      // Pattern
+      document.getElementById('pattern-text').textContent = d.pattern || '—';
+
+      // Matches
+      const ml = document.getElementById('matches-list');
+      ml.innerHTML = '';
+      (d.matches || []).forEach(m => {
+        const div = document.createElement('div');
+        div.className = 'match-card fade-in';
+        const pct = Math.round((m.score || 0) * 100);
+        div.innerHTML = `
+          <div class="match-header">
+            <div class="match-rank">#${m.rank}</div>
+            <div class="match-info">
+              <div class="match-id">${m.incident_id}</div>
+              <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;">
+                <span class="badge badge-domain">${m.domain}</span>
+                <span class="badge badge-${m.severity||'medium'}">${m.severity||'—'}</span>
+              </div>
+              <div class="match-score-label">Score: ${(m.score||0).toFixed(3)}</div>
+              <div class="score-bar" style="width:120px;margin-top:4px;"><div class="score-fill" style="width:${pct}%"></div></div>
+            </div>
+          </div>
+          <div class="slice-summary">${truncate(m.state_summary, 160)}</div>
+          <details style="margin-top:8px;">
+            <summary style="font-size:0.72rem;color:var(--text-faint);cursor:pointer;user-select:none">Resolution used →</summary>
+            <div class="slice-resolution" style="margin-top:6px;">${m.resolution}</div>
+          </details>`;
+        ml.appendChild(div);
+      });
+
+      // Runbook
+      document.getElementById('runbook-content').textContent = d.runbook || '—';
+
+      results.style.display = 'block';
+      results.scrollIntoView({ behavior: 'smooth' });
+      toast('Analysis complete in ' + (d.total_time_s || '?') + 's', 'success');
+    } else {
+      toast('Analysis failed.', 'error');
+    }
+  } catch (e) {
+    clearInterval(stepTimer);
+    toast('API error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    loading.style.display = 'none';
+  }
+}
+
+function copyRunbook() {
+  const text = document.getElementById('runbook-content').textContent;
+  navigator.clipboard.writeText(text).then(() => toast('Runbook copied to clipboard.', 'success'));
+}
+
+/* ── Ingest ──────────────────────────────────────────────────────────── */
+async function ingestSlice() {
+  const domainSel = document.getElementById('ingest-domain').value;
+  const domain = domainSel === 'custom'
+    ? document.getElementById('custom-domain-input').value.trim()
+    : domainSel;
+  const summary    = document.getElementById('ingest-summary').value.trim();
+  const resolution = document.getElementById('ingest-resolution').value.trim();
+  const incId      = document.getElementById('meta-incident-id').value.trim();
+  const severity   = document.getElementById('meta-severity').value;
+  const duration   = document.getElementById('meta-duration').value;
+
+  if (!domain) return toast('Domain required.', 'error');
+  if (!summary) return toast('State summary required.', 'error');
+  if (!resolution) return toast('Resolution required.', 'error');
+
+  const btn = document.getElementById('ingest-btn');
+  const loading = document.getElementById('ingest-loading');
+  btn.disabled = true;
+  loading.style.display = 'flex';
+
+  try {
+    const res = await apiFetch('/api/slices/ingest', 'POST', {
+      state_summary: summary,
+      domain,
+      resolution,
+      metadata: {
+        incident_id: incId || undefined,
+        severity,
+        duration_min: duration ? parseInt(duration) : undefined,
+      }
+    });
+    if (res.success) {
+      toast('Slice ingested! ID: ' + res.data.id.slice(0,8), 'success');
+      // Clear form
+      document.getElementById('ingest-summary').value = '';
+      document.getElementById('ingest-resolution').value = '';
+      document.getElementById('meta-incident-id').value = '';
+      document.getElementById('meta-duration').value = '';
+      loadStats();
+    } else {
+      toast(res.message || 'Ingest failed.', 'error');
+    }
+  } catch (e) {
+    toast('API error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    loading.style.display = 'none';
+  }
+}
+
+async function seedDemo() {
+  const btn = document.getElementById('seed-btn');
+  btn.disabled = true;
+  btn.textContent = 'Seeding…';
+  try {
+    const res = await apiFetch('/api/slices/seed', 'POST');
+    if (res.success) {
+      toast(res.message, 'success');
+      loadStats();
+    } else {
+      toast('Seed failed.', 'error');
+    }
+  } catch (e) {
+    toast('API error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg> Seed Demo Data`;
+  }
+}
+
+/* ── Setup ───────────────────────────────────────────────────────────── */
+function saveConfig() {
+  const url = document.getElementById('setup-api-url').value.trim();
+  const key = document.getElementById('setup-openai-key').value.trim();
+  localStorage.setItem('sentinel_api_url', url);
+  localStorage.setItem('sentinel_openai_key', key);
+  API_BASE = url;
+  toast('Configuration saved.', 'success');
+  checkHealth();
+}
+
+async function initSetup() {
+  const openaiKey = document.getElementById('setup-openai-key').value.trim();
+  const model = document.getElementById('setup-model').value;
+
+  const btn = document.getElementById('init-btn');
+  const loading = document.getElementById('setup-loading');
+  btn.disabled = true;
+  loading.style.display = 'flex';
+
+  try {
+    const res = await apiFetch('/api/setup', 'POST', {
+      openai_api_key: openaiKey || undefined,
+      embedding_model: model,
+    });
+    if (res.success) {
+      toast(res.message, 'success');
+      checkHealth();
+      loadStats();
+    } else {
+      toast('Setup failed.', 'error');
+    }
+  } catch (e) {
+    toast('API error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    loading.style.display = 'none';
+  }
+}
+
+/* ── API helper ──────────────────────────────────────────────────────── */
+async function apiFetch(path, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(API_BASE + path, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || res.statusText);
+  }
+  return res.json();
+}
+
+/* ── Toast ───────────────────────────────────────────────────────────── */
+function toast(message, type = 'info') {
+  const icons = { success: '✓', error: '✕', info: '◈' };
+  const container = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.innerHTML = `<span class="toast-icon">${icons[type] || '◈'}</span> ${message}`;
+  container.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+/* ── Utils ───────────────────────────────────────────────────────────── */
+function truncate(str, len) {
+  if (!str) return '';
+  return str.length > len ? str.slice(0, len) + '…' : str;
+}
+function escAttr(str) {
+  return (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, ' ').slice(0, 120);
+}
+</script>
+</body>
+</html>
